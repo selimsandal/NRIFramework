@@ -304,7 +304,9 @@ static void GLFW_CursorPosCallback(GLFWwindow* window, double x, double y) {
 
     if (p->HasUserInterface()) {
         ImGuiIO& io = ImGui::GetIO();
-        io.AddMousePosEvent(cursorPos.x, cursorPos.y);
+        int windowWidth, windowHeight;
+        glfwGetWindowSize(window, &windowWidth, &windowHeight);
+        io.AddMousePosEvent(cursorPos.x * io.DisplaySize.x / max(windowWidth, 1), cursorPos.y * io.DisplaySize.y / max(windowHeight, 1));
     }
 }
 
@@ -395,11 +397,9 @@ bool SampleBase::InitImgui(nri::Device& device) {
     ImGui::CreateContext();
     ImGui::StyleColorsDark();
 
-    GLFWmonitor* monitor = glfwGetPrimaryMonitor();
-
     float contentScale = 1.0f;
     float unused = 0.0f;
-    glfwGetMonitorContentScale(monitor, &contentScale, &unused);
+    glfwGetWindowContentScale(m_Window, &contentScale, &unused);
 
     printf("DPI scale %.1f%%\n", contentScale * 100.0f);
 
@@ -521,16 +521,27 @@ bool SampleBase::Create(int32_t argc, char** argv, const char* windowTitle) {
     GLFWmonitor* monitor = glfwGetPrimaryMonitor();
 
     const GLFWvidmode* vidmode = glfwGetVideoMode(monitor);
-    const uint32_t screenW = (uint32_t)vidmode->width;
-    const uint32_t screenH = (uint32_t)vidmode->height;
+    int screenX = 0, screenY = 0;
+    int screenW = vidmode->width, screenH = vidmode->height;
+    uint2 windowResolution = m_OutputResolution;
 
-    m_OutputResolution.x = min(m_OutputResolution.x, screenW);
-    m_OutputResolution.y = min(m_OutputResolution.y, screenH);
+#if (NRIF_PLATFORM == NRIF_COCOA)
+    // Render dimensions are pixels; Cocoa window sizes and work areas are points.
+    float scaleX, scaleY;
+    glfwGetMonitorContentScale(monitor, &scaleX, &scaleY);
+    glfwGetMonitorWorkarea(monitor, &screenX, &screenY, &screenW, &screenH);
+    windowResolution.x = max(1u, min((uint32_t)ceil(m_OutputResolution.x / scaleX), uint32_t(screenW * 9 / 10)));
+    windowResolution.y = max(1u, min((uint32_t)ceil(m_OutputResolution.y / scaleY), uint32_t(screenH * 9 / 10)));
+    bool decorated = true;
+#else
+    windowResolution.x = min(windowResolution.x, (uint32_t)screenW);
+    windowResolution.y = min(windowResolution.y, (uint32_t)screenH);
+    m_OutputResolution = windowResolution;
+    bool decorated = windowResolution.x != (uint32_t)screenW && windowResolution.y != (uint32_t)screenH;
+#endif
 
     // Window creation
-    bool decorated = m_OutputResolution.x != screenW && m_OutputResolution.y != screenH;
-
-    printf("Creating %swindow (%u, %u)\n", decorated ? "" : "borderless ", m_OutputResolution.x, m_OutputResolution.y);
+    printf("Creating %swindow (%u, %u)\n", decorated ? "" : "borderless ", windowResolution.x, windowResolution.y);
 
     glfwDefaultWindowHints();
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
@@ -546,6 +557,8 @@ bool SampleBase::Create(int32_t argc, char** argv, const char* windowTitle) {
         graphicsAPI = nri::GraphicsAPI::D3D12;
     } else if (selectedApi == "VULKAN") {
         graphicsAPI = nri::GraphicsAPI::VK;
+    } else if (selectedApi == "METAL") {
+        graphicsAPI = nri::GraphicsAPI::METAL;
     } else if (selectedApi == "WGPU") {
         graphicsAPI = nri::GraphicsAPI::WGPU;
     }
@@ -553,16 +566,23 @@ bool SampleBase::Create(int32_t argc, char** argv, const char* windowTitle) {
     char windowName[256];
     snprintf(windowName, sizeof(windowName), "%s [%s]", windowTitle, nri::nriGetGraphicsAPIString(graphicsAPI));
 
-    m_Window = glfwCreateWindow(m_OutputResolution.x, m_OutputResolution.y, windowName, NULL, NULL);
+    m_Window = glfwCreateWindow(windowResolution.x, windowResolution.y, windowName, NULL, NULL);
     if (!m_Window) {
         glfwTerminate();
         return false;
     }
 
 #if (NRIF_PLATFORM != NRIF_WAYLAND)
-    int32_t x = (screenW - m_OutputResolution.x) >> 1;
-    int32_t y = (screenH - m_OutputResolution.y) >> 1;
+    int32_t x = screenX + (screenW - (int32_t)windowResolution.x) / 2;
+    int32_t y = screenY + (screenH - (int32_t)windowResolution.y) / 2;
     glfwSetWindowPos(m_Window, x, y); // GLFW error[65548]: Wayland: The platform does not support setting the window position
+#endif
+
+#if (NRIF_PLATFORM == NRIF_COCOA)
+    int framebufferWidth, framebufferHeight;
+    glfwGetFramebufferSize(m_Window, &framebufferWidth, &framebufferHeight);
+    m_OutputResolution = uint2(framebufferWidth, framebufferHeight);
+    printf("Framebuffer (%u, %u)\n", m_OutputResolution.x, m_OutputResolution.y);
 #endif
 
 #if (NRIF_PLATFORM == NRIF_WINDOWS)
@@ -697,12 +717,14 @@ void SampleBase::CursorMode(int32_t mode) {
 void SampleBase::InitCmdLineDefault(cmdline::parser& cmdLine) {
 #if (NRIF_PLATFORM == NRIF_WINDOWS)
     std::string graphicsAPI = "D3D12";
+#elif (NRIF_PLATFORM == NRIF_COCOA) && NRI_ENABLE_METAL_SUPPORT
+    std::string graphicsAPI = "METAL";
 #else
     std::string graphicsAPI = "VULKAN";
 #endif
 
     cmdLine.add("help", '?', "print this message");
-    cmdLine.add<std::string>("api", 'a', "graphics API: D3D11, D3D12, VULKAN or WGPU", false, graphicsAPI, cmdline::oneof<std::string>("D3D11", "D3D12", "VULKAN", "WGPU"));
+    cmdLine.add<std::string>("api", 'a', "graphics API: D3D11, D3D12, VULKAN, METAL or WGPU", false, graphicsAPI, cmdline::oneof<std::string>("D3D11", "D3D12", "VULKAN", "METAL", "WGPU"));
     cmdLine.add<std::string>("scene", 's', "scene", false, m_SceneFile);
     cmdLine.add<uint32_t>("width", 'w', "output resolution width", false, m_OutputResolution.x);
     cmdLine.add<uint32_t>("height", 'h', "output resolution height", false, m_OutputResolution.y);

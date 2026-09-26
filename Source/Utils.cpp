@@ -221,6 +221,13 @@ inline const char* GetShaderExt(nri::GraphicsAPI graphicsAPI) {
         return ".dxbc";
     else if (graphicsAPI == nri::GraphicsAPI::D3D12)
         return ".dxil";
+    else if (graphicsAPI == nri::GraphicsAPI::METAL) {
+#if NRI_ENABLE_METAL_SHADER_CONVERTER
+        return ".dxil";
+#else
+        return ".metallib";
+#endif
+    }
 
     return ".spirv";
 }
@@ -397,7 +404,8 @@ bool utils::LoadFile(const std::string& path, std::vector<uint8_t>& data) {
 
 nri::ShaderDesc utils::LoadShader(nri::GraphicsAPI graphicsAPI, const std::string& shaderName, ShaderCodeStorage& storage, const char* entryPointName) {
     const char* ext = GetShaderExt(graphicsAPI);
-    std::string path = GetFullPath(shaderName + ext, DataFolder::SHADERS);
+    const char* subdirectory = graphicsAPI == nri::GraphicsAPI::METAL && NRI_ENABLE_METAL_SHADER_CONVERTER ? "Metal/" : "";
+    std::string path = GetFullPath(subdirectory + shaderName + ext, DataFolder::SHADERS);
     nri::ShaderDesc shaderDesc = {};
 
     size_t i = 1;
