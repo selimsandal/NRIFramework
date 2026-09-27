@@ -19,7 +19,11 @@ void* GetMetalLayer(GLFWwindow* window)
     NSView* contentView = [nsWindow contentView];
     if (![contentView.layer isKindOfClass:[CAMetalLayer class]])
     {
-        [contentView setLayer:[CAMetalLayer layer]];
+        CAMetalLayer* layer = [CAMetalLayer layer];
+        layer.contentsScale = nsWindow.backingScaleFactor;
+        layer.frame = contentView.bounds;
+        layer.autoresizingMask = kCALayerWidthSizable | kCALayerHeightSizable;
+        [contentView setLayer:layer];
         [contentView setWantsLayer:YES];
     }
 
